@@ -19,7 +19,9 @@ class Conductor():
         self.vol = 'f'
         
         self.client = None
-        self.topic_pub = 'ME35-24/Team'
+        self.topic_pub = 'ME35-24/Conduct'
+        
+        self.startFlag = True
         
         print("----- conductor successfully instantiated------")
     
@@ -37,7 +39,7 @@ class Conductor():
     def createClient(self):
         self.connect_wifi()
         
-        mqtt_broker = 'broker.hivemq.com'
+        mqtt_broker = 'broker.emqx.io'
         port = 1883
 
         self.client = MQTTClient('ConductorObject', mqtt_broker, port, keepalive=120)
@@ -45,16 +47,6 @@ class Conductor():
         print("Conductor object has created a client!!!")
     
     # ------- HELPER FUNCTIONS --------
-    async def turnMasterOn(self):
-        self.masterOn  = True
-        await asyncio.sleep(0.01)
-        print(" ~~~~~~ from conductor: masterOn() ~~~~~")
-        
-    async def turnMasterOff(self):
-        self.masterOn = False
-        await asyncio.sleep(0.01)
-        print("~~~~~~ from conductor: masterOff() ~~~~~")
-        
     def turnOn(self):
         self.isOn = True
         print(" ~~~~~~ from conductor: turnOn() ~~~~~")
@@ -72,15 +64,7 @@ class Conductor():
     def changeVol(self, val):
         #val must be input as one of the corresponding velocity options
         self.vol = val
-        msg = None
-        
-        if val == 'f':
-            msg = 'SN'
-        elif val == 'ff':
-            msg = 'LU'
-        elif val == 'p':
-            msg = 'LI'
-            
+
         try:
             self.client.publish(self.topic_pub.encode(), msg.encode())
             print("Sent character message to Dahal Board")
@@ -88,7 +72,6 @@ class Conductor():
             self.client.connect()
             print("Reconnected, trying again...")
             self.client.publish(self.topic_pub.encode(), msg.encode())
-            
     
     def getTempo(self):
         return self.tempo
@@ -100,7 +83,20 @@ class Conductor():
         self.midi.disconnect()
     
     def checkState(self):
-        return self.isOn        
+        return self.isOn
+    
+    def sendMessage(self):
+        msg = 'done'
+        try:
+            self.client.publish(self.topic_pub.encode(), msg.encode())
+            print("Sent done message")
+        except Exception as e:
+            self.client.connect()
+            print("Reconnected, trying again...")
+            self.client.publish(self.topic_pub.encode(), msg.encode())
+        
+    def startSong(self):
+        self.startFlag = True
         
     async def playSong(self):
         # ----- MIDI SETUP ------
@@ -117,23 +113,34 @@ class Conductor():
         from halloweenSong import notes
 
         print("about to start playing!!!")
-        # For each note in song, make sure light uncovered, then play
-        for i in range(0, len(notes)):
-            event = notes[i]
-            
-            msg_type = (event[0] == 'note_on')
-            command = NoteOn if msg_type else NoteOff
+        
+        while True:
+            if self.startFlag:
+                for i in range(0, len(notes)):
+                    event = notes[i]
+                    
+                    msg_type = (event[0] == 'note_on')
+                    command = NoteOn if msg_type else NoteOff
 
-            note = event[1]
-            velocity = event[2]
-            duration = event[3]
-                        
-            while not self.isOn:
-                print(" ------- Waiting for go on note #: "+str(i)+" --------")
-                await asyncio.sleep(0.01)
+                    note = event[1]
+                    velocity = event[2]
+                    duration = event[3]
+                                
+                    while not self.isOn:
+                        print(" ------- Waiting for go on note #: "+str(i)+" --------")
+                        await asyncio.sleep(0.01)
+                    
+                    # When isOn, will play the note
+                    payload = bytes([tsM,tsL, command | channel, note, velocity]) # need to update the timestamp
+                    self.midi.send(payload)    
+                    await asyncio.sleep(duration)
             
-            # When isOn, will play the note
-            payload = bytes([tsM,tsL, command | channel, note, velocity]) # need to update the timestamp
-            self.midi.send(payload)    
-            await asyncio.sleep(duration)
+                # When done, let conductor know
+                self.startFlag = False
+                self.sendMessage()
+            else:
+                print("Need to be turned on")
+                
+            await asyncio.sleep(0.01)
+        
 
